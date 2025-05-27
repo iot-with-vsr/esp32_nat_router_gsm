@@ -10,15 +10,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <pthread.h>
-#include "esp_system.h"
 #include "esp_log.h"
 #include "esp_console.h"
 #include "esp_vfs_dev.h"
 #include "driver/uart.h"
-#include "esp_vfs_usb_serial_jtag.h"
-#include "driver/usb_serial_jtag.h"
 #include "linenoise/linenoise.h"
-#include "argtable3/argtable3.h"
 #include "esp_vfs_fat.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -26,13 +22,7 @@
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
 #include "esp_eap_client.h"
-
-#include "lwip/opt.h"
-#include "lwip/err.h"
-#include "lwip/sys.h"
-
 #include "dhcpserver/dhcpserver.h"
-#include "dhcpserver/dhcpserver_options.h"
 
 #include "cmd_decl.h"
 #include <esp_http_server.h>
