@@ -33,6 +33,7 @@
 #include "lwip/lwip_napt.h"
 
 #include "router_globals.h"
+#include "modem_handler_cmux.h"
 
 // On board LED
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
@@ -226,94 +227,6 @@ esp_err_t del_portmap(u8_t proto, u16_t mport) {
     return ESP_OK;
 }
 
-static void initialize_console(void)
-{
-    /* Disable buffering on stdin */
-    setvbuf(stdin, NULL, _IONBF, 0);
-
-#if CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
-    /* Drain stdout before reconfiguring it */
-    fflush(stdout);
-    fsync(fileno(stdout));
-    
-    /* Minicom, screen, idf_monitor send CR when ENTER key is pressed */
-    esp_vfs_dev_uart_port_set_rx_line_endings(0, ESP_LINE_ENDINGS_CR);
-    /* Move the caret to the beginning of the next line on '\n' */
-    esp_vfs_dev_uart_port_set_tx_line_endings(0, ESP_LINE_ENDINGS_CRLF);
-
-    /* Configure UART. Note that REF_TICK is used so that the baud rate remains
-     * correct while APB frequency is changing in light sleep mode.
-     */
-    const uart_config_t uart_config = {
-            .baud_rate = CONFIG_ESP_CONSOLE_UART_BAUDRATE,
-            .data_bits = UART_DATA_8_BITS,
-            .parity = UART_PARITY_DISABLE,
-            .stop_bits = UART_STOP_BITS_1,
-            #if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S2)
-                .source_clk = UART_SCLK_REF_TICK,
-            #else
-                .source_clk = UART_SCLK_XTAL,
-            #endif
-    };
-    /* Install UART driver for interrupt-driven reads and writes */
-    ESP_ERROR_CHECK( uart_driver_install(CONFIG_ESP_CONSOLE_UART_NUM,
-            256, 0, 0, NULL, 0) );
-    ESP_ERROR_CHECK( uart_param_config(CONFIG_ESP_CONSOLE_UART_NUM, &uart_config) );
-
-    /* Tell VFS to use UART driver */
-    esp_vfs_dev_uart_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
-#endif
-
-#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-    /* Enable non-blocking mode on stdin and stdout */
-    fcntl(fileno(stdout), F_SETFL, O_NONBLOCK);
-    fcntl(fileno(stdin), F_SETFL, O_NONBLOCK);
-
-    /* Minicom, screen, idf_monitor send CR when ENTER key is pressed */
-    esp_vfs_dev_usb_serial_jtag_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
-
-    /* Move the caret to the beginning of the next line on '\n' */
-    esp_vfs_dev_usb_serial_jtag_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
-    usb_serial_jtag_driver_config_t usb_serial_jtag_config = {
-        .tx_buffer_size = 256,
-        .rx_buffer_size = 256,
-    };
-
-    /* Install USB-SERIAL-JTAG driver for interrupt-driven reads and writes */
-    usb_serial_jtag_driver_install(&usb_serial_jtag_config);
-
-    /* Tell vfs to use usb-serial-jtag driver */
-    esp_vfs_usb_serial_jtag_use_driver();
-#endif
-
-    /* Initialize the console */
-    esp_console_config_t console_config = {
-            .max_cmdline_args = 8,
-            .max_cmdline_length = 256,
-#if CONFIG_LOG_COLORS
-            .hint_color = atoi(LOG_COLOR_CYAN)
-#endif
-    };
-    ESP_ERROR_CHECK( esp_console_init(&console_config) );
-
-    /* Configure linenoise line completion library */
-    /* Enable multiline editing. If not set, long commands will scroll within
-     * single line.
-     */
-    linenoiseSetMultiLine(1);
-
-    /* Tell linenoise where to get command completions and hints */
-    linenoiseSetCompletionCallback(&esp_console_get_completion);
-    linenoiseSetHintsCallback((linenoiseHintsCallback*) &esp_console_get_hint);
-
-    /* Set command history size */
-    linenoiseHistorySetMaxLen(100);
-
-#if CONFIG_STORE_HISTORY
-    /* Load command history from filesystem */
-    linenoiseHistoryLoad(HISTORY_PATH);
-#endif
-}
 
 void * led_status_thread(void * p)
 {
@@ -396,16 +309,6 @@ void wifi_init(const uint8_t* mac, const char* ssid, const char* ent_username, c
     wifiAP = esp_netif_create_default_wifi_ap();
     wifiSTA = esp_netif_create_default_wifi_sta();
 
-    esp_netif_ip_info_t ipInfo_sta;
-    if ((strlen(ssid) > 0) && (strlen(static_ip) > 0) && (strlen(subnet_mask) > 0) && (strlen(gateway_addr) > 0)) {
-        has_static_ip = true;
-        ipInfo_sta.ip.addr = esp_ip4addr_aton(static_ip);
-        ipInfo_sta.gw.addr = esp_ip4addr_aton(gateway_addr);
-        ipInfo_sta.netmask.addr = esp_ip4addr_aton(subnet_mask);
-        esp_netif_dhcpc_stop(wifiSTA); // Don't run a DHCP client
-        esp_netif_set_ip_info(wifiSTA, &ipInfo_sta);
-        apply_portmap_tab();
-    }
 
     my_ap_ip = esp_ip4addr_aton(ap_ip);
 
@@ -514,17 +417,17 @@ void wifi_init(const uint8_t* mac, const char* ssid, const char* ent_username, c
 }
 
 uint8_t* mac = NULL;
-char* ssid = NULL;
-char* ent_username = NULL;
-char* ent_identity = NULL;
-char* passwd = NULL;
-char* static_ip = NULL;
-char* subnet_mask = NULL;
-char* gateway_addr = NULL;
+char* ssid = "";
+char* ent_username = "";
+char* ent_identity = "";
+char* passwd = "";
+char* static_ip = "";
+char* subnet_mask = "";
+char* gateway_addr = "";
 uint8_t* ap_mac = NULL;
-char* ap_ssid = NULL;
-char* ap_passwd = NULL;
-char* ap_ip = NULL;
+char* ap_ssid = "ESP32-AP";
+char* ap_passwd = "esp32ap123";
+char* ap_ip = "192.168.4.1";
 
 char* param_set_default(const char* def_val) {
     char * retval = malloc(strlen(def_val)+1);
@@ -532,152 +435,23 @@ char* param_set_default(const char* def_val) {
     return retval;
 }
 
+#define GSM_UART_TX 5 // 12
+#define GSM_UART_RX  34
+#define GSM_RST_PIN GPIO_NUM_14
+#define GSM_BAUDRATE 115200
+
 void app_main(void)
 {
     initialize_nvs();
 
-#if CONFIG_STORE_HISTORY
-    initialize_filesystem();
-    ESP_LOGI(TAG, "Command history enabled");
-#else
-    ESP_LOGI(TAG, "Command history disabled");
-#endif
-
-    get_config_param_blob("mac", &mac, 6);
-    get_config_param_str("ssid", &ssid);
-    if (ssid == NULL) {
-        ssid = param_set_default("");
-    }
-    get_config_param_str("ent_username", &ent_username);
-    if (ent_username == NULL) {
-        ent_username = param_set_default("");
-    }
-    get_config_param_str("ent_identity", &ent_identity);
-    if (ent_identity == NULL) {
-        ent_identity = param_set_default("");
-    }
-    get_config_param_str("passwd", &passwd);
-    if (passwd == NULL) {
-        passwd = param_set_default("");
-    }
-    get_config_param_str("static_ip", &static_ip);
-    if (static_ip == NULL) {
-        static_ip = param_set_default("");
-    }
-    get_config_param_str("subnet_mask", &subnet_mask);
-    if (subnet_mask == NULL) {
-        subnet_mask = param_set_default("");
-    }
-    get_config_param_str("gateway_addr", &gateway_addr);
-    if (gateway_addr == NULL) {
-        gateway_addr = param_set_default("");
-    }
-    get_config_param_blob("ap_mac", &ap_mac, 6);
-    get_config_param_str("ap_ssid", &ap_ssid);
-    if (ap_ssid == NULL) {
-        ap_ssid = param_set_default("ESP32_NAT_Router");
-    }   
-    get_config_param_str("ap_passwd", &ap_passwd);
-    if (ap_passwd == NULL) {
-        ap_passwd = param_set_default("");
-    }
-    get_config_param_str("ap_ip", &ap_ip);
-    if (ap_ip == NULL) {
-        ap_ip = param_set_default(DEFAULT_AP_IP);
-    }
-
-    get_portmap_tab();
+    // get_portmap_tab();
 
     // Setup WIFI
     wifi_init(mac, ssid, ent_username, ent_identity, passwd, static_ip, subnet_mask, gateway_addr, ap_mac, ap_ssid, ap_passwd, ap_ip);
 
-    pthread_t t1;
-    pthread_create(&t1, NULL, led_status_thread, NULL);
+    init_modem_cmux(GSM_UART_TX, GSM_UART_RX, GSM_RST_PIN, GSM_BAUDRATE);
 
     ip_napt_enable(my_ap_ip, 1);
     ESP_LOGI(TAG, "NAT is enabled");
 
-    char* lock = NULL;
-    get_config_param_str("lock", &lock);
-    if (lock == NULL) {
-        lock = param_set_default("0");
-    }
-    if (strcmp(lock, "0") ==0) {
-        ESP_LOGI(TAG,"Starting config web server");
-        start_webserver();
-    }
-    free(lock);
-
-    initialize_console();
-
-    /* Register commands */
-    esp_console_register_help_command();
-    register_system();
-    register_nvs();
-    register_router();
-
-    /* Prompt to be printed before each line.
-     * This can be customized, made dynamic, etc.
-     */
-    const char* prompt = LOG_COLOR_I "esp32> " LOG_RESET_COLOR;
-
-    printf("\n"
-           "ESP32 NAT ROUTER\n"
-           "Type 'help' to get the list of commands.\n"
-           "Use UP/DOWN arrows to navigate through command history.\n"
-           "Press TAB when typing command name to auto-complete.\n");
-
-    if (strlen(ssid) == 0) {
-         printf("\n"
-               "Unconfigured WiFi\n"
-               "Configure using 'set_sta' and 'set_ap' and restart.\n");       
-    }
-
-    /* Figure out if the terminal supports escape sequences */
-    int probe_status = linenoiseProbe();
-    if (probe_status) { /* zero indicates success */
-        printf("\n"
-               "Your terminal application does not support escape sequences.\n"
-               "Line editing and history features are disabled.\n"
-               "On Windows, try using Putty instead.\n");
-        linenoiseSetDumbMode(1);
-#if CONFIG_LOG_COLORS
-        /* Since the terminal doesn't support escape sequences,
-         * don't use color codes in the prompt.
-         */
-        prompt = "esp32> ";
-#endif //CONFIG_LOG_COLORS
-    }
-
-    /* Main loop */
-    while(true) {
-        /* Get a line using linenoise.
-         * The line is returned when ENTER is pressed.
-         */
-        char* line = linenoise(prompt);
-        if (line == NULL) { /* Ignore empty lines */
-            continue;
-        }
-        /* Add the command to the history */
-        linenoiseHistoryAdd(line);
-#if CONFIG_STORE_HISTORY
-        /* Save command history to filesystem */
-        linenoiseHistorySave(HISTORY_PATH);
-#endif
-
-        /* Try to run the command */
-        int ret;
-        esp_err_t err = esp_console_run(line, &ret);
-        if (err == ESP_ERR_NOT_FOUND) {
-            printf("Unrecognized command\n");
-        } else if (err == ESP_ERR_INVALID_ARG) {
-            // command was empty
-        } else if (err == ESP_OK && ret != ESP_OK) {
-            printf("Command returned non-zero error code: 0x%x (%s)\n", ret, esp_err_to_name(ret));
-        } else if (err != ESP_OK) {
-            printf("Internal error: %s\n", esp_err_to_name(err));
-        }
-        /* linenoise allocates line buffer on the heap, so need to free it */
-        linenoiseFree(line);
-    }
 }
